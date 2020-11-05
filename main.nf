@@ -62,6 +62,7 @@ def helpMessage() {
       --quantification_method [str]       Specifies the transcript quantification method to use (available are: bambu or stringtie2). Only available when protocol is cDNA or directRNA.
       --skip_quantification [bool]        Skip transcript quantification and differential analysis (Default: false)
       --skip_differential_analysis [bool] Skip differential analysis with DESeq2 and DEXSeq (Default: false)
+      --skip_modification_analysis [bool] Skip modification analysis with nanopolish and xpore (Default: false)
 
     QC
       --skip_qc [bool]                    Skip all QC steps apart from MultiQC (Default: false)
@@ -176,6 +177,15 @@ if (!params.skip_alignment) {
 if (!params.skip_quantification) {
     if (params.quantification_method != 'bambu' && params.quantification_method != 'stringtie2') {
         exit 1, "Invalid transcript quantification option: ${params.quantification_method}. Valid options: 'bambu', 'stringtie2'"
+    }
+    if (params.protocol != 'cDNA' && params.protocol != 'directRNA') {
+        exit 1, "Invalid protocol option if performing quantification: ${params.protocol}. Valid options: 'cDNA', 'directRNA'"
+    }
+}
+
+if (!params.skip_modification_analysis) {
+    if (params.skip_basecalling) {
+        exit 1, "Indexing with nanopolish requires fast5 inputs."
     }
     if (params.protocol != 'cDNA' && params.protocol != 'directRNA') {
         exit 1, "Invalid protocol option if performing quantification: ${params.protocol}. Valid options: 'cDNA', 'directRNA'"
@@ -335,6 +345,7 @@ ch_samplesheet_reformat
         ch_sample_info
         ch_sample_name
         ch_sample_annotation
+        ch_sample_nanopolish
     }
 
 // Check that reference genome and annotation are the same for all samples if perfoming quantification
@@ -436,6 +447,7 @@ if (!params.skip_basecalling) {
             ch_fastq_gtf
             ch_fastq_index
             ch_fastq_align 
+            ch_fastq_nanopolish
         }
 
 } else {
@@ -516,6 +528,7 @@ if (!params.skip_basecalling) {
     ch_guppy_version          = Channel.empty()
     ch_guppy_pycoqc_summary   = Channel.empty()
     ch_guppy_nanoplot_summary = Channel.empty()
+    ch_fastq_nanopolish       = Channel.empty()
 }
 
 /*
@@ -859,12 +872,14 @@ if (!params.skip_alignment) {
 
     ch_sortbam_quant
         .map { it -> [ it[0], it[3] ] }
-        .set { ch_sortbam_quant }
+        .set { ch_sortbam_quant
+               ch_sortbam_nanopolish }
 
 } else {
     ch_sortbam_bedgraph      = Channel.empty()
     ch_sortbam_bed12         = Channel.empty()
     ch_sortbam_stats_multiqc = Channel.empty()
+    ch_sortbam_nanopolish  = Channel.empty()
 
     ch_samplesheet_reformat
         .splitCsv(header:true, sep:',')
@@ -1194,6 +1209,98 @@ if (!params.skip_quantification && (params.protocol == 'cDNA' || params.protocol
             """
         }
     }
+
+    if (!params.skip_modification_analysis) {
+
+        /*
+         * Run nanopolish and eventalign  
+         */
+        process NANOPOLISH {
+            label 'process_medium'
+            publishDir "${params.outdir}/nanopolish/", mode: params.publish_dir_mode
+
+            when:
+            MULTIPLE_CONDITIONS
+
+            input:
+            path val(sample), path(fast5), path(genome) from ch_sample_nanopolish.map{ it[0], it[1], it[3] }
+            path basecalled_fastq from ch_fastq_nanopolish
+            path bam from ch_sortbam_nanopolish.map{ it[1] }
+            
+            output:
+            val sample into ch_sample_xpore
+            path "*.fast*"
+            path "eventalign.txt" into ch_nanopolish_eventalign
+            path "summary.txt" into ch_nanopolish_summary
+            
+            script:
+            """
+            nanopolish index -d $fast5 $basecalled_fastq
+            nanopolish eventalign \\
+            --reads $basecalled_fastq \\ 
+            --bam $bam \\
+            --genome $genome \\
+            --scale-events \\
+            --signal-index \\
+            --summary summary.txt \\
+            --threads $params.guppy_cpu_threads > eventalign.txt
+            """
+        }
+
+        /*
+         * XPORE data preparation
+         */
+        process XPORE_DATAPREP {
+            label 'process_medium'
+            publishDir "${params.outdir}/xpore/dataprep", mode: params.publish_dir_mode
+
+            when:
+            MULTIPLE_CONDITIONS
+
+            input:
+            val sample from ch_sample_xpore
+            path nanopolish_eventalign from ch_nanopolish_eventalign
+            path nanopolish_summary from ch_nanopolish_summary
+
+            output:
+            path $sample into ch_sample_diffmod
+            
+            script:
+            """
+            xpore-dataprep \\
+            --eventalign $nanopolish_eventalign \\
+            --summary $nanopolish_summary \\
+            --out_dir $sample \\
+            --genome
+            """
+        }
+        
+        /*
+         * XPORE differential m6A expression analysis
+         */
+        process XPORE_DIFFMOD {
+            label 'process_medium'
+            publishDir "${params.outdir}/xpore/diffmod", mode: params.publish_dir_mode
+
+            when:
+            MULTIPLE_CONDITIONS
+
+            input:
+            path datapreps from ch_sample_diffmod.collect()
+
+            output:
+            path "config.yml"
+            path "*.log"
+            path "*.table"
+            
+            script:
+            """
+            \\ add python script to create config.yml
+            xpore-diffmod --config config.yml
+            """
+        }
+    }
+    
 } else {
     ch_featurecounts_transcript_multiqc = Channel.empty()
     ch_featurecounts_gene_multiqc       = Channel.empty()
