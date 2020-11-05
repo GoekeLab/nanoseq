@@ -18,6 +18,7 @@ dependencies:
   - bioconda::multiqc=1.9
   - bioconda::qcat=1.1.0
   - bioconda::nanoplot=1.32.1
+  - bioconda::nanopolish=0.13.2
   - bioconda::samtools=1.11
   - bioconda::minimap2=2.17
   - bioconda::graphmap=0.6.3
