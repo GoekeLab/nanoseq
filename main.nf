@@ -62,7 +62,10 @@ def helpMessage() {
       --quantification_method [str]       Specifies the transcript quantification method to use (available are: bambu or stringtie2). Only available when protocol is cDNA or directRNA.
       --skip_quantification [bool]        Skip transcript quantification and differential analysis (Default: false)
       --skip_differential_analysis [bool] Skip differential analysis with DESeq2 and DEXSeq (Default: false)
+
+    Modification analysis
       --skip_modification_analysis [bool] Skip modification analysis with nanopolish and xpore (Default: false)
+      --skip_xpore [bool]                 Skip xpore (Default: false)
 
     QC
       --skip_qc [bool]                    Skip all QC steps apart from MultiQC (Default: false)
@@ -128,8 +131,6 @@ if (!params.skip_basecalling) {
         } else {
             exit 1, "NXF_OFFLINE=true or -offline has been set so cannot download and run any test dataset!"
         }
-    } else {
-        if (params.input_path) { ch_input_path = Channel.fromPath(params.input_path, checkIfExists: true) } else { exit 1, "Please specify a valid run directory to perform basecalling!" }
     }
 
     // Need to stage guppy_config properly depending on whether its a file or string
@@ -184,11 +185,8 @@ if (!params.skip_quantification) {
 }
 
 if (!params.skip_modification_analysis) {
-    if (params.skip_basecalling) {
-        exit 1, "Indexing with nanopolish requires fast5 inputs."
-    }
-    if (params.protocol != 'cDNA' && params.protocol != 'directRNA') {
-        exit 1, "Invalid protocol option if performing quantification: ${params.protocol}. Valid options: 'cDNA', 'directRNA'"
+    if (params.protocol != 'directRNA') {
+        exit 1, "Invalid protocol option if performing modification analysis: ${params.protocol}. Valid option: 'directRNA'"
     }
 }
 
@@ -227,7 +225,6 @@ summary['Stranded']               = (params.stranded || params.protocol == 'dire
 summary['Skip Basecalling']       = params.skip_basecalling ? 'Yes' : 'No'
 summary['Skip Demultiplexing']    = params.skip_demultiplexing ? 'Yes' : 'No'
 if (!params.skip_basecalling) {
-    summary['Run Dir']            = params.input_path
     summary['Flowcell ID']        = params.flowcell ?: 'Not required'
     summary['Kit ID']             = params.kit ?: 'Not required'
     summary['Barcode Kit ID']     = params.barcode_kit ?: 'Unspecified'
@@ -329,21 +326,21 @@ def get_sample_info(LinkedHashMap sample, LinkedHashMap genomeMap) {
     input_file = sample.input_file ? file(sample.input_file, checkIfExists: true) : null
     gtf        = sample.gtf        ? file(sample.gtf, checkIfExists: true)        : gtf
 
-    return [ sample.sample, input_file, sample.barcode, fasta, gtf, sample.is_transcripts.toBoolean(), fasta.toString()+';'+gtf.toString() ]
+    return [ sample.sample, input_file, sample.barcode, fasta, gtf, sample.is_transcripts.toBoolean(), fasta.toString()+';'+gtf.toString(), sample.nanopolish_fast5 ]
 }
 
 // Create channels = [ sample, barcode, fasta, gtf, is_transcripts, annotation_str ]
 ch_samplesheet_reformat
     .splitCsv(header:true, sep:',')
     .map { get_sample_info(it, params.genomes) }
-    .map { it -> [ it[0], it[2], it[3], it[4], it[5], it[6] ] }
+    .map { it -> [ it[0], it[2], it[3], it[4], it[5], it[6], it[1] , it[7] ] }
     .into {
         ch_sample_fasta
         ch_sample_gtf
         ch_sample_replicates
         ch_sample_groups
         ch_sample_info
-        ch_sample_name
+        ch_sample_guppy
         ch_sample_annotation
         ch_sample_nanopolish
     }
@@ -366,29 +363,20 @@ if (!params.skip_quantification) {
 }
 
 if (!params.skip_basecalling) {
-
-    // Get sample name for single sample when --skip_demultiplexing
-    ch_sample_name
-        .first()
-        .map { it[0] }
-        .set { ch_sample_name }
-
+    guppy_config = ch_guppy_config.ifEmpty([])
+    guppy_model  = ch_guppy_model.ifEmpty([])
     /*
      * Basecalling and demultipexing using Guppy
      */
     process GUPPY {
-        tag "$input_path"
-        label 'process_high'
+        label 'process_medium'
         publishDir path: "${params.outdir}/guppy", mode: params.publish_dir_mode,
             saveAs: { filename ->
                           if (!filename.endsWith("guppy.txt")) filename
                     }
 
         input:
-        path input_path from ch_input_path
-        val name from ch_sample_name
-        path guppy_config from ch_guppy_config.ifEmpty([])
-        path guppy_model from ch_guppy_model.ifEmpty([])
+        tuple val(name), path(input_path) from ch_sample_guppy.map{ ch -> [ ch[0], ch[6] ]}
 
         output:
         path "fastq/*.fastq.gz" into ch_fastq
@@ -436,10 +424,9 @@ if (!params.skip_basecalling) {
 
     // Create channels = [ sample, fastq, fasta, gtf, is_transcripts, annotation_str ]
     ch_fastq
-        .flatten()
-        .map { it -> [ it, it.baseName.substring(0,it.baseName.lastIndexOf('.')) ] } // [barcode001.fastq, barcode001]
-        .join(ch_sample_info, by: 1) // join on barcode
-        .map { it -> [ it[2], it[1], it[3], it[4], it[5], it[6] ] }
+        .map { it -> [ it.baseName.substring(0,it.baseName.lastIndexOf('.')), it ] } // [name_replicate, name_replicate.fastq.gz]
+        .join(ch_sample_info) // join on name_replicate
+        .map { it -> [ it[0], it[1], it[3], it[4], it[5], it[6] ] }
         .into { 
             ch_fastq_nanoplot
             ch_fastq_fastqc
@@ -449,7 +436,6 @@ if (!params.skip_basecalling) {
             ch_fastq_align 
             ch_fastq_nanopolish
         }
-
 } else {
     if (!params.skip_demultiplexing) {
 
@@ -504,6 +490,7 @@ if (!params.skip_basecalling) {
                 ch_fastq_gtf
                 ch_fastq_index
                 ch_fastq_align 
+                ch_fastq_nanopolish
             }
     } else {
         if (!params.skip_alignment) {
@@ -519,6 +506,7 @@ if (!params.skip_basecalling) {
                     ch_fastq_gtf
                     ch_fastq_index
                     ch_fastq_align 
+                    ch_fastq_nanopolish
                 }
         } else {
             ch_fastq_nanoplot = Channel.empty()
@@ -528,7 +516,6 @@ if (!params.skip_basecalling) {
     ch_guppy_version          = Channel.empty()
     ch_guppy_pycoqc_summary   = Channel.empty()
     ch_guppy_nanoplot_summary = Channel.empty()
-    ch_fastq_nanopolish       = Channel.empty()
 }
 
 /*
@@ -856,7 +843,8 @@ if (!params.skip_alignment) {
         output:
         tuple val(sample), path(sizes), val(is_transcripts), path("*.sorted.bam"), path("*.sorted.bam.bai") into ch_sortbam_bedgraph,
                                                                                                                  ch_sortbam_bed12,
-                                                                                                                 ch_sortbam_quant
+                                                                                                                 ch_sortbam_quant,
+                                                                                                                 ch_sortbam_nanopolish
         path "*.{flagstat,idxstats,stats}" into ch_sortbam_stats_multiqc
         
         script:
@@ -872,9 +860,15 @@ if (!params.skip_alignment) {
 
     ch_sortbam_quant
         .map { it -> [ it[0], it[3] ] }
-        .set { ch_sortbam_quant
-               ch_sortbam_nanopolish }
-
+        .set { ch_sortbam_quant }
+    ch_sortbam_nanopolish
+        .map { it -> [ it[0], it[3], it[4]] }
+        .set { ch_sortbam_nanopolish }
+    ch_sample_nanopolish
+        .join( ch_fastq_nanopolish )
+        .map {it -> [ it[0], it[2], it[3], it[7], it[8] ]}
+        .join( ch_sortbam_nanopolish )
+        .set{ ch_nanopolish_inputs }
 } else {
     ch_sortbam_bedgraph      = Channel.empty()
     ch_sortbam_bed12         = Channel.empty()
@@ -1026,7 +1020,7 @@ if (!params.skip_quantification && (params.protocol == 'cDNA' || params.protocol
          * Quantification and novel isoform detection with bambu
          */
         process BAMBU {
-            label 'process_high'
+            label 'process_medium'
             publishDir "${params.outdir}/${params.quantification_method}", mode: params.publish_dir_mode,
                 saveAs: { filename ->
                             if (!filename.endsWith("bambu.txt")) filename
@@ -1209,101 +1203,95 @@ if (!params.skip_quantification && (params.protocol == 'cDNA' || params.protocol
             """
         }
     }
-
-    if (!params.skip_modification_analysis) {
-
-        /*
-         * Run nanopolish and eventalign  
-         */
-        process NANOPOLISH {
-            label 'process_medium'
-            publishDir "${params.outdir}/nanopolish/", mode: params.publish_dir_mode
-
-            when:
-            MULTIPLE_CONDITIONS
-
-            input:
-            path val(sample), path(fast5), path(genome) from ch_sample_nanopolish.map{ it[0], it[1], it[3] }
-            path basecalled_fastq from ch_fastq_nanopolish
-            path bam from ch_sortbam_nanopolish.map{ it[1] }
-            
-            output:
-            val sample into ch_sample_xpore
-            path "*.fast*"
-            path "eventalign.txt" into ch_nanopolish_eventalign
-            path "summary.txt" into ch_nanopolish_summary
-            
-            script:
-            """
-            nanopolish index -d $fast5 $basecalled_fastq
-            nanopolish eventalign \\
-            --reads $basecalled_fastq \\ 
-            --bam $bam \\
-            --genome $genome \\
-            --scale-events \\
-            --signal-index \\
-            --summary summary.txt \\
-            --threads $params.guppy_cpu_threads > eventalign.txt
-            """
-        }
-
-        /*
-         * XPORE data preparation
-         */
-        process XPORE_DATAPREP {
-            label 'process_medium'
-            publishDir "${params.outdir}/xpore/dataprep", mode: params.publish_dir_mode
-
-            when:
-            MULTIPLE_CONDITIONS
-
-            input:
-            val sample from ch_sample_xpore
-            path nanopolish_eventalign from ch_nanopolish_eventalign
-            path nanopolish_summary from ch_nanopolish_summary
-
-            output:
-            path $sample into ch_sample_diffmod
-            
-            script:
-            """
-            xpore-dataprep \\
-            --eventalign $nanopolish_eventalign \\
-            --summary $nanopolish_summary \\
-            --out_dir $sample \\
-            --genome
-            """
-        }
-        
-        /*
-         * XPORE differential m6A expression analysis
-         */
-        process XPORE_DIFFMOD {
-            label 'process_medium'
-            publishDir "${params.outdir}/xpore/diffmod", mode: params.publish_dir_mode
-
-            when:
-            MULTIPLE_CONDITIONS
-
-            input:
-            path datapreps from ch_sample_diffmod.collect()
-
-            output:
-            path "config.yml"
-            path "*.log"
-            path "*.table"
-            
-            script:
-            """
-            \\ add python script to create config.yml
-            xpore-diffmod --config config.yml
-            """
-        }
-    }
     
 } else {
     ch_featurecounts_transcript_multiqc = Channel.empty()
     ch_featurecounts_gene_multiqc       = Channel.empty()
+}
+
+if (!params.skip_modification_analysis) {
+
+   /*
+    * Run nanopolish and eventalign  
+    */
+    process NANOPOLISH {
+        label 'process_medium'
+        publishDir "${params.outdir}/nanopolish/$sample", mode: params.publish_dir_mode
+
+        input:
+        tuple val(sample), path(genome), path(gtf), path(fast5), path(fastq), path(bam), path(bai) from ch_nanopolish_inputs
+            
+        output:
+        tuple val(sample), path(genome), path(gtf), path("*eventalign.txt"), path("*summary.txt") into ch_xpore_dataprep_inputs
+        path 'v_nanopolish.txt' into ch_nanopolish_version
+            
+        script:
+        sample_summary = "$sample" +"_summary.txt"
+        sample_eventalign = "$sample" +"_eventalign.txt" 
+        """
+        nanopolish index -d $fast5 $fastq
+        nanopolish eventalign  --reads $fastq --bam $bam --genome $genome --scale-events --signal-index --summary $sample_summary --threads $params.guppy_cpu_threads > $sample_eventalign
+        nanopolish --version | sed -e "s/nanopolish version //g" | head -n 1 > v_nanopolish.txt
+        """
+    }
+   
+   if (!params.skip_xpore) {
+       /*
+        * XPORE data preparation
+        */
+        process XPORE_DATAPREP {
+           label 'process_medium'
+           publishDir "${params.outdir}/xpore/dataprep/", mode: params.publish_dir_mode
+
+           input:
+           tuple val(sample), path(genome), path(gtf), path(eventalign), path(nanopolish_summary) from ch_xpore_dataprep_inputs
+
+           output:
+           tuple path("$sample"), val(sample) into ch_xpore_dataprep_dirs, ch_check      
+           path "xpore_version.txt" into ch_xpore_version       
+     
+           script:
+           """
+           xpore-dataprep \\
+           --eventalign $eventalign \\
+           --summary $nanopolish_summary \\
+           --out_dir $sample \\
+           --genome --customised_genome --reference_name customised_reference --annotation_name customised_annotation --gtf_path_or_url $gtf --transcript_fasta_paths_or_urls $genome
+           pip3 show xpore > xpore_version.txt
+           """
+        }
+
+        ch_xpore_dataprep_dirs
+            .map{ it -> it[0]+','+it[1] }
+            .set{ ch_xpore_diffmod_inputs }
+
+       /*
+        * XPORE data preparation
+        */
+        process XPORE_DIFFMOD {
+           echo true
+           label 'process_medium'
+           publishDir "${params.outdir}/xpore/", mode: params.publish_dir_mode
+
+           input:
+           val dataprep_dirs from ch_xpore_diffmod_inputs.collect()
+
+           output:
+           path "*"
+         
+           script:
+           diffmod_config = "$workflow.workDir/*/*/diffmod_config.yml"
+           """
+           create_yml.py diffmod_config.yml $dataprep_dirs
+           xpore-diffmod --config $diffmod_config
+           """
+        }
+    } else {
+        ch_xpore_version  = Channel.empty()
+    }
+} else {
+    ch_nanopolish_version = Channel.empty()
+    ch_xpore_version      = Channel.empty()
 }
 
 /*
@@ -1336,9 +1324,11 @@ process GET_SOFTWARE_VERSIONS {
                 }
 
     input:
-    path guppy from ch_guppy_version.collect().ifEmpty([])
+    path guppy from ch_guppy_version.first().ifEmpty([])
     path pycoqc from ch_pycoqc_version.collect().ifEmpty([])
-    
+    path nanopolish from ch_nanopolish_version.first().ifEmpty([])
+    path xpore from ch_xpore_version.first().ifEmpty([])    
+
     output:
     path 'software_versions_mqc.yaml' into software_versions_yaml
     path "software_versions.csv"
