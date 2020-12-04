@@ -697,7 +697,7 @@ if (!params.skip_alignment) {
             tuple path(fasta), path(sizes), val(gtf), val(bed), val(is_transcripts), path("*.mmi"), val(annotation_str) into ch_index
 
             script:
-            preset    = (params.protocol == 'DNA' || is_transcripts) ? "-ax map-ont" : "-ax splice"
+            preset    = (params.protocol == 'DNA' || is_transcripts || !params.skip_modification_analysis) ? "-ax map-ont" : "-ax splice"
             kmer      = (params.protocol == 'directRNA') ? "-k14" : ""
             stranded  = (params.stranded || params.protocol == 'directRNA') ? "-uf" : ""
             // TODO pipeline: Should be staging bed file properly as an input
@@ -769,7 +769,7 @@ if (!params.skip_alignment) {
             tuple val(sample), path(sizes), val(is_transcripts), path("*.sam") into ch_align_sam
 
             script:
-            preset    = (params.protocol == 'DNA' || is_transcripts) ? "-ax map-ont" : "-ax splice"
+            preset    = (params.protocol == 'DNA' || is_transcripts || !params.skip_modification_analysis) ? "-ax map-ont" : "-ax splice"
             kmer      = (params.protocol == 'directRNA') ? "-k14" : ""
             stranded  = (params.stranded || params.protocol == 'directRNA') ? "-uf" : ""
             // TODO pipeline: Should be staging bed file properly as an input
