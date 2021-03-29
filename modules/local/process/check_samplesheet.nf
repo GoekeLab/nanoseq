@@ -47,5 +47,5 @@ def get_sample_info(LinkedHashMap sample, LinkedHashMap genomeMap) {
     input_file = sample.input_file ? file(sample.input_file, checkIfExists: true) : null
     gtf        = sample.gtf        ? file(sample.gtf, checkIfExists: true)        : gtf
 
-    return [ sample.sample, input_file, sample.barcode, fasta, gtf, sample.is_transcripts.toBoolean(), fasta.toString()+';'+gtf.toString() ]
+    return [ sample.sample, input_file, sample.barcode, fasta, gtf, sample.is_transcripts.toBoolean(), fasta.toString()+';'+gtf.toString(), sample.nanopolish_fast5 ]
 }
