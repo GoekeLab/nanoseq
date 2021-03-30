@@ -38,7 +38,7 @@ workflow RNA_MODIFICATION_XPORE_M6ANET {
          */
         XPORE_M6ANET_DATAPREP( ch_nanopolish_outputs )
         ch_dataprep_dirs = XPORE_M6ANET_DATAPREP.out.dataprep_outputs
-
+        xpore_version = ''
         if (!params.skip_xpore) {
             ch_dataprep_dirs
                 .map{ it -> it[0]+','+it[1] }
@@ -49,11 +49,13 @@ workflow RNA_MODIFICATION_XPORE_M6ANET {
             XPORE_DIFFMOD{ ch_xpore_diffmod_inputs.collect() }
             xpore_version    = XPORE_DIFFMOD.out.version
         }
+        m6anet_version = ''
         if (!params.skip_m6anet) {
             /*
              * Detect m6A sites with m6anet
              */
             M6ANET_INFERENCE{ ch_dataprep_dirs }
+            m6anet_version   = M6ANET_INFERENCE.out.version
         }
     }
 
@@ -62,4 +64,5 @@ workflow RNA_MODIFICATION_XPORE_M6ANET {
     ch_dataprep_dirs
     xpore_version
     nanopolish_version
+    m6anet_version
 }

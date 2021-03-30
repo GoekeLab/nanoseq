@@ -27,8 +27,7 @@ process XPORE_M6ANET_DATAPREP {
         --eventalign $eventalign \\
         --summary $nanopolish_summary \\
         --out_dir $sample \\
-        --program $program \\
-        --genome --gtf_path_or_url $gtf --transcript_fasta_paths_or_urls $genome
+        --program $program
         """
     } else if (params.skip_m6anet){
         def program = "xpore"
@@ -47,8 +46,7 @@ process XPORE_M6ANET_DATAPREP {
         --eventalign $eventalign \\
         --summary $nanopolish_summary \\
         --out_dir $sample \\
-        --program $program \\
-        --genome --gtf_path_or_url $gtf --transcript_fasta_paths_or_urls $genome
+        --program $program
         """
     }
 }
