@@ -34,7 +34,6 @@ def print_error(error, context='Line', context_str=''):
 def check_samplesheet(file_in, file_out):
     """
     This function checks that the samplesheet follows the following structure:
-
     group,replicate,barcode,input_file,genome,transcriptome
     MCF7,1,,MCF7_directcDNA_replicate1.fastq.gz,genome.fa,
     MCF7,2,,MCF7_directcDNA_replicate3.fastq.gz,genome.fa,genome.gtf
@@ -57,7 +56,7 @@ def check_samplesheet(file_in, file_out):
         ## Check sample entries
         for line in fin:
             lspl = [x.strip() for x in line.strip().split(",")]
-
+            nanopolish_fast5 = ''
             ## Check valid number of columns per row
             if len(lspl) < len(HEADER):
                 print_error("Invalid number of columns (minimum = {})!".format(len(HEADER)), 'Line', line)
@@ -93,14 +92,34 @@ def check_samplesheet(file_in, file_out):
             if input_file:
                 if input_file.find(" ") != -1:
                     print_error("Input file contains spaces!", 'Line', line)
-                if not input_file.endswith(".fastq.gz") and not input_file.endswith(".fq.gz") and not input_file.endswith(".bam"):
-                    print_error("Input file does not have extension '.fastq.gz', '.fq.gz' or '.bam'!", 'Line', line)
                 if input_file.endswith(".fastq.gz"):
                     input_extensions.append("*.fastq.gz")
                 elif input_file.endswith(".fq.gz"):
                     input_extensions.append("*.fq.gz")
                 elif input_file.endswith(".bam"):
                     input_extensions.append("*.bam")
+                else:
+                    list_dir         = os.listdir(input_file)
+                    nanopolish_fast5 = input_file
+                    if not (all(fname.endswith('.fast5') for fname in list_dir)):
+                        if "fast5" in list_dir and "fastq" in list_dir:
+                            nanopolish_fast5 = input_file+'/fast5'
+                            ## CHECK FAST5 DIRECTORY
+                            if not (all(fname.endswith('.fast5') for fname in os.listdir(nanopolish_fast5))):
+                                print_error('fast5 directory contains non-fast5 files.')
+                            ## CHECK PROVIDED BASECALLED FASTQ
+                            fastq_path       = input_file+'/fastq'
+                            basecalled_fastq = [fn for fn in os.listdir(fastq_path) if fn.endswith(".fastq.gz") or fn.endswith(".fq.gz") ]
+                            print(basecalled_fastq)
+                            if len(basecalled_fastq) != 1:
+                                print_error('Please input one basecalled fastq per sample.')
+                            else:
+                                input_file   = fastq_path+'/'+basecalled_fastq[0]
+                                if not basecalled_fastq[0].endswith(".fastq.gz"):
+                                    if not basecalled_fastq[0].endswith(".fq.gz"):
+                                        print_error('basecalled fastq input does not end with ".fastq.gz" or ".fq.gz"')
+                        else:
+                            print_error('path does not end with ".fastq.gz", ".fq.gz", or ".bam" and is not an existing directory with correct fast5 and/or fastq inputs.')
 
             ## Check genome entries
             if genome:
@@ -127,7 +146,7 @@ def check_samplesheet(file_in, file_out):
                     genome = transcriptome
 
             ## Create sample mapping dictionary = {group: {replicate : [ barcode, input_file, genome, gtf, is_transcripts ]}}
-            sample_info = [barcode, input_file, genome, gtf, is_transcripts]
+            sample_info = [barcode, input_file, genome, gtf, is_transcripts, nanopolish_fast5]
             if group not in sample_info_dict:
                 sample_info_dict[group] = {}
             if replicate not in sample_info_dict[group]:
@@ -145,7 +164,7 @@ def check_samplesheet(file_in, file_out):
         make_dir(out_dir)
         with open(file_out, "w") as fout:
 
-            fout.write(",".join(['sample', 'barcode', 'input_file', 'genome', 'gtf', 'is_transcripts']) + "\n")
+            fout.write(",".join(['sample', 'barcode', 'input_file', 'genome', 'gtf', 'is_transcripts', 'nanopolish_fast5']) + "\n")
             for sample in sorted(sample_info_dict.keys()):
 
                 ## Check that replicate ids are in format 1..<NUM_REPS>

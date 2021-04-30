@@ -164,6 +164,10 @@ def stringtie2_options          = modules['stringtie2']
 def featurecounts_options       = modules['subread_featurecounts']
 def deseq2_options              = modules['deseq2']
 def dexseq_options              = modules['dexseq']
+def nanopolish_options          = modules['nanopolish']
+def xpore_m6anet_dataprep_options = modules['xpore_m6anet_dataprep']
+def xpore_diffmod_options = modules['xpore_diffmod']
+def m6anet_inference_options = modules['m6anet_inference']
 
 include { INPUT_CHECK                      } from '../subworkflows/local/input_check'                       addParams( options: [:] )
 include { QCBASECALL_PYCOQC_NANOPLOT       } from '../subworkflows/local/qcbasecall_pycoqc_nanoplot'        addParams( pycoqc_options: pycoqc_options, nanoplot_summary_options: nanoplot_summary_options )
@@ -175,6 +179,7 @@ include { BEDTOOLS_UCSC_BIGWIG             } from '../subworkflows/local/bedtool
 include { BEDTOOLS_UCSC_BIGBED             } from '../subworkflows/local/bedtools_ucsc_bigbed'              addParams( bigbed_options: bigbed_options )
 include { QUANTIFY_STRINGTIE_FEATURECOUNTS } from '../subworkflows/local/quantify_stringtie_featurecounts'  addParams( stringtie2_options: stringtie2_options, featurecounts_options: featurecounts_options )
 include { DIFFERENTIAL_DESEQ2_DEXSEQ       } from '../subworkflows/local/differential_deseq2_dexseq'        addParams( deseq2_options: deseq2_options, dexseq_options: dexseq_options )
+include { RNA_MODIFICATION_XPORE_M6ANET    } from '../subworkflows/local/rna_modifications_xpore_m6anet'     addParams( nanopolish_options: nanopolish_options, xpore_m6anet_dataprep_options: xpore_m6anet_dataprep_options, xpore_diffmod_options: xpore_diffmod_options, m6anet_inference_options: m6anet_inference_options )
 
 ////////////////////////////////////////////////////
 /* --    IMPORT NF-CORE MODULES/SUBWORKFLOWS   -- */
@@ -350,6 +355,9 @@ workflow NANOSEQ{
        ch_view_sortbam
           .map { it -> [ it[0], it[3] ] }
           .set { ch_sortbam }
+       ch_view_sortbam
+          .map { it -> [ it[0], it[3], it[4] ] }
+          .set { ch_nanopolish_sortbam }
     } else {
        ch_sample
            .map { it -> if (it[6].toString().endsWith('.bam')) [ it[0], it[6] ] }
@@ -419,6 +427,14 @@ workflow NANOSEQ{
        }
        ch_software_versions = ch_software_versions.mix(ch_r_version.first().ifEmpty(null))
     }
+
+    if (!params.skip_modification_analysis && params.protocol == 'directRNA') {
+        /*
+         * SUBWORKFLOW: RNA modification detection with xPore and m6anet
+         */
+        RNA_MODIFICATION_XPORE_M6ANET( ch_sample, ch_nanopolish_sortbam )
+    }
+
 
     /*
      * MODULE: Parse software version numbers
